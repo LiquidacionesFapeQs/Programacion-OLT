@@ -121,7 +121,7 @@
     </div>
 
     <script>
-        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxRR3vF__CXINtppeeMMR3coba_hIhLy_nK_6geHcPRpJhHakr-Ag70GEbQTK8fvre5/exec';
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbymAIlrgbRj0c9r_gRSWDgrI8NjonCNfcp7Uxn2yx3GzmVZHMG72HThO7F_3HAvYDAw/exec';
         const REQUIRED_COLS = ["Fec.Despacho", "Área de OLT", "Entrega", "Factura/B.V.", "GR", "Am - Pm", "Cita", "Razón Social del Cliente", "Distrito", "Provincia", "Departamento", "Línea", "Bultos", "Volumen", "Peso", "Tipo de despacho", "Tipo de Transporte", "Tipo de Mercaderia", "Observación", "Código del Transporte"];
 
         let appState = {
@@ -239,52 +239,124 @@
         }
 
         async function uploadData() {
-            const omit = document.getElementById('omit-dupes').checked;
-            const dataToUpload = omit ? appState.cleanRowsOnly : appState.originalData;
+    // 1. Obtener datos según la elección del checkbox 'omitir duplicados locales'
+    const omit = document.getElementById('omit-dupes').checked;
+    const dataInitial = omit ? appState.cleanRowsOnly : appState.originalData;
 
-            if (dataToUpload.length === 0) return Swal.fire('Sin datos', 'No hay registros válidos para subir', 'info');
+    if (dataInitial.length === 0) return Swal.fire('Sin datos', 'No hay registros para subir', 'info');
 
+    Swal.fire({
+        title: 'Verificando Historial',
+        text: 'Consultando registros existentes en la base de datos...',
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading()
+    });
+
+    try {
+        // 2. GENERAR LLAVES ÚNICAS (Igual que en el servidor)
+        const keysMap = dataInitial.map(row => {
+            const d = row[0];
+            // Normalizar fecha a string de milisegundos para comparar sin errores de formato
+            const dateStr = (d instanceof Date) ? d.getTime().toString() : d.toString();
+            return dateStr + "|" + row[2] + "|" + row[4] + "|" + row[11] + "|" + row[16];
+        });
+
+        // 3. CONSULTAR DUPLICADOS AL SERVIDOR
+        const checkResp = await fetch(WEB_APP_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action: 'checkDuplicates', keysToCheck: keysMap })
+        });
+        const checkRes = await checkResp.json();
+        if (checkRes.status !== "Success") throw new Error(checkRes.info);
+        
+        const existingKeys = checkRes.info.existingKeys;
+
+        // 4. FILTRAR: Dejar solo lo que NO está en la base de datos
+        const rowsToUpload = dataInitial.filter((_, i) => !existingKeys.includes(keysMap[i]));
+        const skipped = existingKeys.length;
+
+        if (rowsToUpload.length === 0) {
+            return Swal.fire('Sin novedades', `Los ${skipped} registros ya existen en la base de datos histórica.`, 'info');
+        }
+
+        // 5. ENVÍO POR LOTES (Chunking) para archivos pesados
+        const tamañoLote = 500; // Grupos de 500 para evitar Timeouts
+        for (let i = 0; i < rowsToUpload.length; i += tamañoLote) {
+            const lote = rowsToUpload.slice(i, i + tamañoLote);
+            
             Swal.fire({
-                title: 'Sincronizando con Google',
-                text: 'Procesando registros en la base de datos...',
+                title: 'Subiendo datos...',
+                text: `Procesando: ${Math.min(i + tamañoLote, rowsToUpload.length)} de ${rowsToUpload.length}`,
                 allowOutsideClick: false,
                 didOpen: () => Swal.showLoading()
             });
 
-            // CORRECCIÓN: Estructura del paquete de envío
-            const dataPacket = {
-                action: 'upload',
-                payload: dataToUpload,
-                userName: appState.user.name // Trazabilidad de quién sube el archivo
-            };
-
-            try {
-        const response = await fetch(WEB_APP_URL, {
-            method: 'POST',
-            body: JSON.stringify(dataPacket)
-        });
-
-        const result = await response.json();
-
-        if (result.status === "Success") {
-            // Generar el resumen visual (msg) que ya tenías...
-            let msg = `<div class="text-left text-xs bg-slate-50 p-3 rounded border border-slate-200">`;
-            // ... (resto de tu lógica de resumen de líneas y transporte) ... [cite: 61, 62, 63]
-
-            Swal.fire({
-                title: '¡Carga Finalizada!',
-                html: `Se registraron exitosamente <b>${result.info.count}</b> líneas.<br><br>${msg}`,
-                icon: 'success'
-            }).then(() => {
-                resetApp();
+            const response = await fetch(WEB_APP_URL, {
+                method: 'POST',
+                body: JSON.stringify({
+                    action: 'upload',
+                    payload: lote,
+                    userName: appState.user.name
+                })
             });
-        } else {
-            Swal.fire('Error en Servidor', result.info, 'error');
+
+            const result = await response.json();
+            if (result.status !== "Success") throw new Error(result.info);
         }
+
+        // 6. MOSTRAR RESUMEN FINAL
+        mostrarResumenFinal(rowsToUpload, skipped);
+
     } catch (error) {
-        Swal.fire('Error de Red', 'El servidor no respondió correctamente.', 'error');
+        console.error(error);
+        Swal.fire('Error Crítico', error.message || 'Error de conexión con el servidor', 'error');
     }
-        }
+}
+
+        function mostrarResumenFinal(dataUploaded, skippedCount) {
+    const resumenLineas = {};
+    const resumenTransporte = {};
+
+    // Procesar estadísticas solo de los datos nuevos subidos
+    dataUploaded.forEach(row => {
+        const linea = row[11] || 'Sin Línea';
+        const transporte = row[16] || 'Sin Transporte';
+        resumenLineas[linea] = (resumenLineas[linea] || 0) + 1;
+        resumenTransporte[transporte] = (resumenTransporte[transporte] || 0) + 1;
+    });
+
+    // Construir el cuerpo del mensaje
+    let msg = `<div class="text-left text-xs bg-slate-50 p-3 rounded border border-slate-200 max-h-64 overflow-y-auto">`;
+    
+    msg += `<p class="text-blue-600 font-bold border-b pb-1 mb-2 uppercase">Resumen por Línea:</p>`;
+    for (const l in resumenLineas) {
+        msg += `<div class="flex justify-between border-b border-gray-100 py-1"><span>${l}:</span> <b>${resumenLineas[l]}</b></div>`;
+    }
+
+    msg += `<p class="text-green-600 font-bold border-b pb-1 mt-4 mb-2 uppercase">Resumen por Transporte:</p>`;
+    for (const t in resumenTransporte) {
+        msg += `<div class="flex justify-between border-b border-gray-100 py-1"><span>${t}:</span> <b>${resumenTransporte[t]}</b></div>`;
+    }
+
+    // Alerta de duplicados omitidos
+    if (skippedCount > 0) {
+        msg += `<div class="mt-4 p-2 bg-amber-50 text-amber-800 rounded border border-amber-200 text-center">`;
+        msg += `ℹ️ Se omitieron <b>${skippedCount}</b> registros que ya existían en el historial.`;
+        msg += `</div>`;
+    }
+    
+    msg += `</div>`;
+
+    Swal.fire({
+        title: '¡Carga Exitosa!',
+        html: msg,
+        icon: 'success',
+        confirmButtonColor: '#3b82f6',
+        confirmButtonText: 'Finalizar'
+    }).then(() => {
+        resetApp(); // Limpia el formulario para la siguiente carga
+    });
+}
 
         function resetApp() {
             appState.originalData = [];
