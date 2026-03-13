@@ -121,7 +121,7 @@
     </div>
 
     <script>
-        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbymAIlrgbRj0c9r_gRSWDgrI8NjonCNfcp7Uxn2yx3GzmVZHMG72HThO7F_3HAvYDAw/exec';
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbw58BrDDbR8oF1zBCalMe-MJuAXPFV6UQ6Y1hz4TGQdM-dSCBystQ0Elrzu-da_jxY6/exec';
         const REQUIRED_COLS = ["Fec.Despacho", "Área de OLT", "Entrega", "Factura/B.V.", "GR", "Am - Pm", "Cita", "Razón Social del Cliente", "Distrito", "Provincia", "Departamento", "Línea", "Bultos", "Volumen", "Peso", "Tipo de despacho", "Tipo de Transporte", "Tipo de Mercaderia", "Observación", "Código del Transporte"];
 
         let appState = {
@@ -255,11 +255,31 @@
     try {
         // 2. GENERAR LLAVES ÚNICAS (Igual que en el servidor)
         const keysMap = dataInitial.map(row => {
-            const d = row[0];
-            // Normalizar fecha a string de milisegundos para comparar sin errores de formato
-            const dateStr = (d instanceof Date) ? d.getTime().toString() : d.toString();
-            return dateStr + "|" + row[2] + "|" + row[4] + "|" + row[11] + "|" + row[16];
-        });
+    let datePart = "";
+    const d = row[0];
+
+    if (d instanceof Date) {
+        // Extraer año, mes y día manualmente para evitar desfases de zona horaria
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        datePart = `${year}-${month}-${day}`;
+    } else if (typeof d === 'number') {
+        // Si SheetJS devuelve el número de serie de Excel (ej. 45352)
+        const dateObj = new Date((d - 25569) * 86400 * 1000);
+        const year = dateObj.getFullYear();
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        datePart = `${year}-${month}-${day}`;
+    } else {
+        // Si ya es un texto, lo limpiamos
+        datePart = String(d).trim();
+    }
+
+    // Llave única: Fecha|Entrega|GR|Línea|Transporte
+    // Usamos .toString().trim() en cada campo para que " 123" sea igual a "123"
+    return `${datePart}|${String(row[2]).trim()}|${String(row[4]).trim()}|${String(row[11]).trim()}|${String(row[16]).trim()}`;
+});
 
         // 3. CONSULTAR DUPLICADOS AL SERVIDOR
         const checkResp = await fetch(WEB_APP_URL, {
