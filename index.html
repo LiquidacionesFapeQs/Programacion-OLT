@@ -52,7 +52,7 @@
                     Ingresar
                 </button>
             </div>
-                <div id="login-error" class="hidden-view mt-4 bg-red-50 ...">
+                <div id="login-error" class="hidden-view mt-4 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl flex items-center">
                 <i data-lucide="alert-circle"></i>
                 <span id="login-error-msg">Credenciales incorrectas.</span>
             </div>
@@ -214,28 +214,29 @@
                 return;
             }
                     
-            Swal.fire({
-                title: 'Validando acceso...',
-                text: 'Consultando base de usuarios...',
-                allowOutsideClick: false,
-                didOpen: () => Swal.showLoading()
+            Swal.fire({title: 'Validando acceso...', text: 'Consultando base de usuarios...', allowOutsideClick: false, didOpen: () => Swal.showLoading()
             });
-              const response = await fetch(WEB_APP_URL, {
+        try {
+            const response = await fetch(WEB_APP_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({ action: 'login', dni, pass })
-        });
-        const data = await response.json();
-    
-        if (data.status === 'Success') {
+            body: JSON.stringify({ action: 'login', dni, pass }) });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            Swal.close();
+                
+            if (data.status === 'Success') {
             appState.user = { dni: data.dni, name: data.name }; // Nombre viene del servidor
-            if (remember) localStorage.setItem('olt_session_v3', ...);
+            if (remember) localStorage.setItem('olt_session_v3', JSON.stringify(appState.user));
             showMainView();
-        } else {
-            showLoginError(data.message); // Mensaje real del servidor
-        }
-        }
-
+            }
+            else {showLoginError(data.message);}
+            }
+                
+            catch (err) {
+                Swal.close();
+                showLoginError("No se pudo conectar con el servidor.");
+            }
         function showMainView() {
             document.getElementById('view-login').classList.add('hidden-view');
             document.getElementById('view-main').classList.remove('hidden-view');
@@ -244,7 +245,7 @@
         }
 
         function logout() {
-            localStorage.removeItem('olt_session_v2');
+            localStorage.removeItem('olt_session_v3');
             location.reload();
         }
 
@@ -342,14 +343,6 @@
                 didOpen: () => Swal.showLoading()
             });
 
-            const payload = {
-                dni: appState.user.dni,
-                pass: appState.user.pass,
-                action: 'upload',
-                payload: dataToUpload,
-                userName: appState.user.name
-            };
-
             try {
                 // Manejo de caché/red: Intentamos envío
                 const response = await fetch(WEB_APP_URL, {
@@ -363,9 +356,30 @@
                 }
                     
                 const data = await response.json(); // Lee respuesta real
-                if (data.status === 'Success')  
-                if (data.status === 'Warning')  
-                if (data.status === 'Error') 
+           if (data.status === 'Success') {
+    const resumenLinea = {}, resumenTransporte = {};
+    dataToUpload.forEach(r => {
+        const linea = r[11] || "Sin definir";
+        const transporte = r[16] || "Sin definir";
+        resumenLinea[linea] = (resumenLinea[linea] || 0) + 1;
+        resumenTransporte[transporte] = (resumenTransporte[transporte] || 0) + 1;
+    });
+    let html = `<div class="text-left text-sm">
+        <p class="font-bold text-green-700 mb-3">✅ ${data.rows} registro(s) insertados.</p>`;
+    if (data.skipped > 0) html += `<p class="text-amber-600 mb-3">⚠️ ${data.skipped} omitidos por duplicado en BD.</p>`;
+    html += `<div class="bg-slate-50 p-3 rounded-lg border text-xs"><b>Por Línea:</b><br>`;
+    for (const l in resumenLinea) html += `• ${l}: ${resumenLinea[l]}<br>`;
+    html += `<br><b>Por Transporte:</b><br>`;
+    for (const t in resumenTransporte) html += `• ${t}: ${resumenTransporte[t]}<br>`;
+    html += `</div></div>`;
+    Swal.fire({ title: '¡Carga Finalizada!', html, icon: 'success' }).then(() => resetApp());
+
+} else if (data.status === 'Warning') {
+    Swal.fire({ title: 'Sin registros nuevos', text: data.message, icon: 'warning' }).then(() => resetApp());
+
+} else {
+    Swal.fire({ title: 'Error del Servidor', text: data.message || "Error desconocido.", icon: 'error' });
+} 
              
 
                 dataToUpload.forEach(r => {
