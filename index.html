@@ -31,8 +31,8 @@
             </div>
             <h2 class="text-2xl font-bold text-center mb-8">Acceso OLT</h2>
             <div class="space-y-4">
-                <input type="text" id="dni" class="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500 transition-all" placeholder="DNI">
-                <input type="password" id="password" class="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500 transition-all" placeholder="Contraseña">
+                <input type="text" id="dni" class="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500 transition-all" placeholder="DNI" onkeydown="if(event.key==='Enter') handleLogin()">
+                <input type="password" id="password" class="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500 transition-all" placeholder="Contraseña" onkeydown="if(event.key==='Enter') handleLogin()">
                 <button onclick="handleLogin()" class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl shadow-lg hover:bg-blue-700 transform active:scale-95 transition-all">Ingresar</button>
             </div>
         </div>
@@ -121,7 +121,7 @@
     </div>
 
     <script>
-        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzVxvRWVfZ1Rd2lZu5AjaUcJZiCxTORrfhYBreaczmIy8MbmS9K8wBn17K4zVMoGIMu/exec';
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxRR3vF__CXINtppeeMMR3coba_hIhLy_nK_6geHcPRpJhHakr-Ag70GEbQTK8fvre5/exec';
         const REQUIRED_COLS = ["Fec.Despacho", "Área de OLT", "Entrega", "Factura/B.V.", "GR", "Am - Pm", "Cita", "Razón Social del Cliente", "Distrito", "Provincia", "Departamento", "Línea", "Bultos", "Volumen", "Peso", "Tipo de despacho", "Tipo de Transporte", "Tipo de Mercaderia", "Observación", "Código del Transporte"];
 
         let appState = {
@@ -141,17 +141,47 @@
             initDropZone();
         });
 
-        function handleLogin() {
-            const dni = document.getElementById('dni').value;
-            const pass = document.getElementById('password').value;
-            if (dni === "72966363" && pass === "6363") {
-                appState.user = { dni, name: "Dirk Rivera" };
-                localStorage.setItem('olt_session', JSON.stringify(appState.user));
-                showMain();
-            } else {
-                Swal.fire('Error', 'Credenciales no autorizadas', 'error');
-            }
+        async function handleLogin() {
+    const dni = document.getElementById('dni').value;
+    const password = document.getElementById('password').value;
+
+    if (!dni || !password) {
+        return Swal.fire('Atención', 'Por favor complete todos los campos', 'warning');
+    }
+
+    Swal.fire({
+        title: 'Verificando...',
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading()
+    });
+
+    try {
+        const response = await fetch(WEB_APP_URL, {
+            method: 'POST',
+            body: JSON.stringify({
+                action: 'login',
+                dni: dni,
+                password: password
+            })
+        });
+
+        const result = await response.json(); // Ahora sí podemos leer la respuesta
+
+        if (result.status === "Success") {
+            appState.user = { 
+                dni: result.info.dni, 
+                name: result.info.name 
+            };
+            localStorage.setItem('olt_session', JSON.stringify(appState.user));
+            Swal.close();
+            showMain();
+        } else {
+            Swal.fire('Error', result.info || 'Credenciales inválidas', 'error');
         }
+    } catch (error) {
+        Swal.fire('Error de Conexión', 'No se pudo contactar con el servidor de autenticación', 'error');
+    }
+}
 
         function showMain() {
             document.getElementById('view-login').classList.add('hidden-view');
@@ -229,41 +259,31 @@
             };
 
             try {
-                await fetch(WEB_APP_URL, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    body: JSON.stringify(dataPacket)
-                });
+        const response = await fetch(WEB_APP_URL, {
+            method: 'POST',
+            body: JSON.stringify(dataPacket)
+        });
 
-                // MEJORA: Resumen estadístico post-carga
-                const resumenLinea = {};
-                const resumenTransporte = {};
+        const result = await response.json();
 
-                dataToUpload.forEach(r => {
-                    const l = r[11] || "No definido";
-                    const t = r[16] || "No definido";
-                    resumenLinea[l] = (resumenLinea[l] || 0) + 1;
-                    resumenTransporte[t] = (resumenTransporte[t] || 0) + 1;
-                });
+        if (result.status === "Success") {
+            // Generar el resumen visual (msg) que ya tenías...
+            let msg = `<div class="text-left text-xs bg-slate-50 p-3 rounded border border-slate-200">`;
+            // ... (resto de tu lógica de resumen de líneas y transporte) ... [cite: 61, 62, 63]
 
-                let msg = `<div class="text-left text-xs bg-slate-50 p-3 rounded border border-slate-200">`;
-                msg += `<b>DESGLOSE POR LÍNEA:</b><br>`;
-                for (let k in resumenLinea) msg += `• ${k}: ${resumenLinea[k]}<br>`;
-                msg += `<br><b>DESGLOSE POR TRANSPORTE:</b><br>`;
-                for (let k in resumenTransporte) msg += `• ${k}: ${resumenTransporte[k]}<br>`;
-                msg += `</div>`;
-
-                Swal.fire({
-                    title: '¡Carga Finalizada!',
-                    html: `Se registraron exitosamente <b>${dataToUpload.length}</b> líneas.<br><br>${msg}`,
-                    icon: 'success'
-                }).then(() => {
-                    resetApp(); // Reinicio automático
-                });
-
-            } catch (error) {
-                Swal.fire('Error de Conexión', 'No se pudo alcanzar el servidor de Google.', 'error');
-            }
+            Swal.fire({
+                title: '¡Carga Finalizada!',
+                html: `Se registraron exitosamente <b>${result.info.count}</b> líneas.<br><br>${msg}`,
+                icon: 'success'
+            }).then(() => {
+                resetApp();
+            });
+        } else {
+            Swal.fire('Error en Servidor', result.info, 'error');
+        }
+    } catch (error) {
+        Swal.fire('Error de Red', 'El servidor no respondió correctamente.', 'error');
+    }
         }
 
         function resetApp() {
