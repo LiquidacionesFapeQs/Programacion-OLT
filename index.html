@@ -121,7 +121,7 @@
     </div>
 
     <script>
-        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbx43Bp3IFfuEEgtgj0Exal27702eHUSwUlVEXSspGprk4aXfhZZVFbLixzG3s0UTzSk/exec';
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxJrLzyNfX5YEnomGqv_TsL12Wuzhps87BopFUholSKjoTjbYFN3J1Il30p0TADyiwz/exec';
         const REQUIRED_COLS = ["Fec.Despacho", "Área de OLT", "Entrega", "Factura/B.V.", "GR", "Am - Pm", "Cita", "Razón Social del Cliente", "Distrito", "Provincia", "Departamento", "Línea", "Bultos", "Volumen", "Peso", "Tipo de despacho", "Tipo de Transporte", "Tipo de Mercaderia", "Observación", "Código del Transporte"];
 
         let appState = {
@@ -288,6 +288,29 @@
         });
         const checkRes = await checkResp.json();
         if (checkRes.status !== "Success") throw new Error(checkRes.info);
+
+        const validTransports = checkRes.info.validTransports;
+        const invalidRows = [];
+        dataInitial.forEach((row, index) => {
+            const transporteArchivo = String(row[16] || "").trim();
+            // Si el valor del Excel no existe en la lista de la hoja AUX
+            if (!validTransports.includes(transporteArchivo)) {
+                invalidRows.push({ fila: index + 2, valor: transporteArchivo });
+            }
+        });
+        if (invalidRows.length > 0) {
+            let errorMsg = "Tipos de transporte no válidos encontrados:<br><br>";
+            invalidRows.slice(0, 5).forEach(err => {
+                errorMsg += `• Fila ${err.fila}: "<b>${err.valor}</b>"<br>`;
+            });
+            if (invalidRows.length > 5) errorMsg += "...y otros más.";
+            
+            return Swal.fire({
+                title: 'Error de Catálogo',
+                html: errorMsg + "<br><br>Corrige estos valores según la hoja <b>AUX</b>.",
+                icon: 'error'
+            });
+        }
         
         const existingKeys = checkRes.info.existingKeys;
 
