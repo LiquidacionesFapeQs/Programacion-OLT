@@ -398,6 +398,29 @@ function mostrarCargando(titulo, texto) {
     });
 }
 
+        // Agrega esta función en tu indexOLT.txt para corregir el error de definición
+function mostrarErrorCatalogo(errors) {
+    // Tomamos los primeros 5 errores para no saturar la pantalla
+    let list = errors.slice(0, 5).map(e => `Fila ${e.fila}: "<b>${e.valor}</b>"`).join('<br>');
+    
+    if (errors.length > 5) {
+        list += `<br>...y ${errors.length - 5} errores más.`;
+    }
+
+    Swal.fire({
+        title: 'Transporte No Válido',
+        html: `
+            <div class="text-left text-sm">
+                Los siguientes valores de transporte no existen en la hoja <b>AUX</b>. 
+                Por favor, corrígelos en tu Excel y vuelve a intentar:<br><br>
+                ${list}
+            </div>
+        `,
+        icon: 'error',
+        confirmButtonColor: '#3b82f6'
+    });
+}
+
         function resetApp() {
             appState.originalData = [];
             appState.cleanRowsOnly = [];
