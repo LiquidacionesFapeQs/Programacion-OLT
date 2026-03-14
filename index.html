@@ -121,7 +121,7 @@
     </div>
 
     <script>
-        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxwONKULr1iDKaAlY2WUSN7LP6iZxLIqSzN_xIJg0O5Fc9TzTtTv-7PLPw5s_wt-vs/exec';
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzexn6Ez1XCvyKoudTCQouFPFcK_oQ9ZhVHF9MboJSQSz3KWRlWt1msb7K-0oetNIAi/exec';
         const REQUIRED_COLS = ["Fec.Despacho", "Área de OLT", "Entrega", "Factura/B.V.", "GR", "Am - Pm", "Cita", "Razón Social del Cliente", "Distrito", "Provincia", "Departamento", "Línea", "Bultos", "Volumen", "Peso", "Tipo de despacho", "Tipo de Transporte", "Tipo de Mercaderia", "Observación", "Código del Transporte"];
 
         let appState = {
@@ -248,21 +248,32 @@
     mostrarCargando('Validando...', 'Consultando duplicados y catálogos en la nube');
 
     try {
-        // --- FASE 1: GENERACIÓN DE LLAVES NORMALIZADAS ---
-        const keysMap = dataInitial.map(row => {
-            let datePart = "";
-            const d = row[0];
-            if (d instanceof Date) {
-                datePart = d.toISOString().split('T')[0]; // YYYY-MM-DD
-            } else if (typeof d === 'number') {
-                const dateObj = new Date((d - 25569) * 86400 * 1000);
-                datePart = dateObj.toISOString().split('T')[0];
-            } else {
-                datePart = String(d).trim();
-            }
-            // Llave: Fecha | Entrega | GR | Línea | Transporte
-            return `${datePart}|${String(row[2]).trim()}|${String(row[4]).trim()}|${String(row[11]).trim()}|${String(row[16]).trim()}`;
-        });
+        // --- FASE 1: GENERACIÓN DE LLAVES CORREGIDA ---
+const keysMap = dataInitial.map(row => {
+    let datePart = "";
+    const d = row[0];
+
+    const formatToYYYYMMDD = (dateObj) => {
+        const year = dateObj.getFullYear();
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
+    if (d instanceof Date) {
+        datePart = formatToYYYYMMDD(d); // Usa hora local, no UTC
+    } else if (typeof d === 'number') {
+        const dateObj = new Date((d - 25569) * 86400 * 1000);
+        datePart = formatToYYYYMMDD(dateObj);
+    } else {
+        datePart = String(d).trim();
+    }
+
+    // Normalización total: Todo a Mayúsculas y sin espacios
+    const clean = (val) => String(val || "").trim().toUpperCase();
+    
+    return `${datePart}|${clean(row[2])}|${clean(row[4])}|${clean(row[11])}|${clean(row[16])}`;
+});
 
         // --- FASE 2: CONSULTA UNIFICADA AL BACKEND ---
         const checkResp = await fetch(WEB_APP_URL, {
@@ -411,7 +422,7 @@ function mostrarErrorCatalogo(errors) {
         title: 'Transporte No Válido',
         html: `
             <div class="text-left text-sm">
-                Los siguientes valores de transporte no existen en la hoja <b>AUX</b>. 
+                Los siguientes valores de <b>Tipo de transporte</b> no estan permitidos. 
                 Por favor, corrígelos en tu Excel y vuelve a intentar:<br><br>
                 ${list}
             </div>
