@@ -121,7 +121,7 @@
     </div>
 
     <script>
-        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxJrLzyNfX5YEnomGqv_TsL12Wuzhps87BopFUholSKjoTjbYFN3J1Il30p0TADyiwz/exec';
+        const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxwONKULr1iDKaAlY2WUSN7LP6iZxLIqSzN_xIJg0O5Fc9TzTtTv-7PLPw5s_wt-vs/exec';
         const REQUIRED_COLS = ["Fec.Despacho", "Área de OLT", "Entrega", "Factura/B.V.", "GR", "Am - Pm", "Cita", "Razón Social del Cliente", "Distrito", "Provincia", "Departamento", "Línea", "Bultos", "Volumen", "Peso", "Tipo de despacho", "Tipo de Transporte", "Tipo de Mercaderia", "Observación", "Código del Transporte"];
 
         let appState = {
@@ -239,49 +239,32 @@
         }
 
         async function uploadData() {
-    // 1. Obtener datos según la elección del checkbox 'omitir duplicados locales'
+    // 1. Preparación de datos locales
     const omit = document.getElementById('omit-dupes').checked;
     const dataInitial = omit ? appState.cleanRowsOnly : appState.originalData;
 
-    if (dataInitial.length === 0) return Swal.fire('Sin datos', 'No hay registros para subir', 'info');
+    if (dataInitial.length === 0) return Swal.fire('Sin datos', 'No hay registros para procesar', 'info');
 
-    Swal.fire({
-        title: 'Verificando Historial',
-        text: 'Consultando registros existentes en la base de datos...',
-        allowOutsideClick: false,
-        didOpen: () => Swal.showLoading()
-    });
+    mostrarCargando('Validando...', 'Consultando duplicados y catálogos en la nube');
 
     try {
-        // 2. GENERAR LLAVES ÚNICAS (Igual que en el servidor)
+        // --- FASE 1: GENERACIÓN DE LLAVES NORMALIZADAS ---
         const keysMap = dataInitial.map(row => {
-    let datePart = "";
-    const d = row[0];
+            let datePart = "";
+            const d = row[0];
+            if (d instanceof Date) {
+                datePart = d.toISOString().split('T')[0]; // YYYY-MM-DD
+            } else if (typeof d === 'number') {
+                const dateObj = new Date((d - 25569) * 86400 * 1000);
+                datePart = dateObj.toISOString().split('T')[0];
+            } else {
+                datePart = String(d).trim();
+            }
+            // Llave: Fecha | Entrega | GR | Línea | Transporte
+            return `${datePart}|${String(row[2]).trim()}|${String(row[4]).trim()}|${String(row[11]).trim()}|${String(row[16]).trim()}`;
+        });
 
-    if (d instanceof Date) {
-        // Extraer año, mes y día manualmente para evitar desfases de zona horaria
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        datePart = `${year}-${month}-${day}`;
-    } else if (typeof d === 'number') {
-        // Si SheetJS devuelve el número de serie de Excel (ej. 45352)
-        const dateObj = new Date((d - 25569) * 86400 * 1000);
-        const year = dateObj.getFullYear();
-        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-        const day = String(dateObj.getDate()).padStart(2, '0');
-        datePart = `${year}-${month}-${day}`;
-    } else {
-        // Si ya es un texto, lo limpiamos
-        datePart = String(d).trim();
-    }
-
-    // Llave única: Fecha|Entrega|GR|Línea|Transporte
-    // Usamos .toString().trim() en cada campo para que " 123" sea igual a "123"
-    return `${datePart}|${String(row[2]).trim()}|${String(row[4]).trim()}|${String(row[11]).trim()}|${String(row[16]).trim()}`;
-});
-
-        // 3. CONSULTAR DUPLICADOS AL SERVIDOR
+        // --- FASE 2: CONSULTA UNIFICADA AL BACKEND ---
         const checkResp = await fetch(WEB_APP_URL, {
             method: 'POST',
             body: JSON.stringify({ action: 'checkDuplicates', keysToCheck: keysMap })
@@ -289,71 +272,85 @@
         const checkRes = await checkResp.json();
         if (checkRes.status !== "Success") throw new Error(checkRes.info);
 
-        const validTransports = checkRes.info.validTransports;
+        // --- FASE 3: VALIDACIÓN DE TRANSPORTES (Hoja AUX) ---
+        const validTransports = checkRes.info.validTransports || [];
         const invalidRows = [];
-        dataInitial.forEach((row, index) => {
-            const transporteArchivo = String(row[16] || "").trim();
-            // Si el valor del Excel no existe en la lista de la hoja AUX
-            if (!validTransports.includes(transporteArchivo)) {
-                invalidRows.push({ fila: index + 2, valor: transporteArchivo });
+        dataInitial.forEach((row, i) => {
+            const t = String(row[16] || "").trim();
+            if (!validTransports.includes(t)) {
+                invalidRows.push({ fila: i + 2, valor: t });
             }
         });
-        if (invalidRows.length > 0) {
-            let errorMsg = "Tipos de transporte no válidos encontrados:<br><br>";
-            invalidRows.slice(0, 5).forEach(err => {
-                errorMsg += `• Fila ${err.fila}: "<b>${err.valor}</b>"<br>`;
-            });
-            if (invalidRows.length > 5) errorMsg += "...y otros más.";
-            
-            return Swal.fire({
-                title: 'Error de Catálogo',
-                html: errorMsg + "<br><br>Corrige estos valores según la hoja <b>AUX</b>.",
-                icon: 'error'
-            });
-        }
-        
-        const existingKeys = checkRes.info.existingKeys;
 
-        // 4. FILTRAR: Dejar solo lo que NO está en la base de datos
+        if (invalidRows.length > 0) {
+            return mostrarErrorCatalogo(invalidRows);
+        }
+
+        // --- FASE 4: FILTRADO DE DUPLICADOS ---
+        const existingKeys = checkRes.info.existingKeys || [];
         const rowsToUpload = dataInitial.filter((_, i) => !existingKeys.includes(keysMap[i]));
         const skipped = existingKeys.length;
 
         if (rowsToUpload.length === 0) {
-            return Swal.fire('Sin novedades', `Los ${skipped} registros ya existen en la base de datos histórica.`, 'info');
+            return Swal.fire('Nada nuevo', `Los ${skipped} registros ya existen en la base de datos.`, 'info');
         }
 
-        // 5. ENVÍO POR LOTES (Chunking) para archivos pesados
-        const tamañoLote = 500; // Grupos de 500 para evitar Timeouts
-        for (let i = 0; i < rowsToUpload.length; i += tamañoLote) {
-            const lote = rowsToUpload.slice(i, i + tamañoLote);
-            
-            Swal.fire({
-                title: 'Subiendo datos...',
-                text: `Procesando: ${Math.min(i + tamañoLote, rowsToUpload.length)} de ${rowsToUpload.length}`,
-                allowOutsideClick: false,
-                didOpen: () => Swal.showLoading()
-            });
+        // --- FASE 5: CARGA POR LOTES (CHUNK EN 500) ---
+        const chunkSize = 500;
+        for (let i = 0; i < rowsToUpload.length; i += chunkSize) {
+            const batch = rowsToUpload.slice(i, i + chunkSize);
+            mostrarCargando('Subiendo...', `Procesando lote ${Math.min(i + chunkSize, rowsToUpload.length)} de ${rowsToUpload.length}`);
 
-            const response = await fetch(WEB_APP_URL, {
+            const resp = await fetch(WEB_APP_URL, {
                 method: 'POST',
                 body: JSON.stringify({
                     action: 'upload',
-                    payload: lote,
+                    payload: batch,
                     userName: appState.user.name
                 })
             });
-
-            const result = await response.json();
-            if (result.status !== "Success") throw new Error(result.info);
+            const resBatch = await resp.json();
+            if (resBatch.status !== "Success") throw new Error(resBatch.info);
         }
 
-        // 6. MOSTRAR RESUMEN FINAL
+        // Éxito Total
         mostrarResumenFinal(rowsToUpload, skipped);
 
-    } catch (error) {
-        console.error(error);
-        Swal.fire('Error Crítico', error.message || 'Error de conexión con el servidor', 'error');
+    } catch (err) {
+        console.error(err);
+        Swal.fire('Error de Proceso', err.message, 'error');
     }
+}
+
+        function mostrarResumenFinal(uploadedData, skippedCount) {
+    const statsLineas = {};
+    uploadedData.forEach(r => {
+        const linea = r[11] || 'N/A';
+        statsLineas[linea] = (statsLineas[linea] || 0) + 1;
+    });
+
+    let html = `<div class="text-left text-xs bg-gray-50 p-3 rounded border border-gray-200">`;
+    html += `<b class="text-blue-700">RESUMEN DE CARGA:</b><br>`;
+    for (let key in statsLineas) {
+        html += `• ${key}: ${statsLineas[key]} registros<br>`;
+    }
+    if (skippedCount > 0) {
+        html += `<div class="mt-2 p-1 bg-amber-100 text-amber-800 rounded text-center">
+                   Omitidos por duplicidad: <b>${skippedCount}</b>
+                 </div>`;
+    }
+    html += `</div>`;
+
+    Swal.fire({ title: '¡Carga Exitosa!', html: html, icon: 'success' }).then(() => resetApp());
+}
+
+function mostrarCargando(titulo, texto) {
+    Swal.fire({
+        title: titulo,
+        text: texto,
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading()
+    });
 }
 
         function mostrarResumenFinal(dataUploaded, skippedCount) {
